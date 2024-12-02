@@ -1,0 +1,326 @@
+*&---------------------------------------------------------------------*
+*& Report YTESTVIC2
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+report ytestvic5 message-id 00.
+
+************************************************************************
+* 程 序 名：
+* 程序描述：ABAP调用http接口上传文件
+* 事务代码：
+************************************************************************
+* 修改日志
+************************************************************************
+* 日期     版本 修改人       描述
+* -------- ---- ------------ -------------------------------------------
+* 20230607 1.0  Amell        创建程序
+*
+************************************************************************
+*report zhttp_test message-id 00.
+
+************************************************************************
+* Tables Definitions
+************************************************************************
+tables: rlgrap.
+
+************************************************************************
+* Data Definitions                定义数据
+************************************************************************
+types: begin of ty_file,
+         line(1024) type x,
+       end of ty_file.
+
+data: gt_file type table of ty_file.
+
+data: gv_file_name type sdbah-actid,
+      gv_file_type type sdbad-funct,
+      gv_file      type xstring.
+
+************************************************************************
+* Includes Module                 包含模块
+************************************************************************
+
+************************************************************************
+* Selection Screen                选择屏幕
+************************************************************************
+parameters: p_file like rlgrap-filename obligatory.
+
+************************************************************************
+* Initialization                  初始化事件
+************************************************************************
+initialization.
+
+************************************************************************
+* At Selection Screen             PAI事件
+************************************************************************
+at selection-screen on value-request for p_file.
+  perform frm_f4_file.
+
+************************************************************************
+* At Selection Screen Output      PBO事件
+************************************************************************
+at selection-screen output.
+
+************************************************************************
+* Report Format                   报表格式
+************************************************************************
+top-of-page.
+
+end-of-page.
+
+************************************************************************
+* Main Process                    主要逻辑
+************************************************************************
+start-of-selection.
+
+  "读取上传文件
+  perform frm_read_upload_file.
+  "调用http接口上传文件
+  perform frm_call_http_to_upload_file.
+
+end-of-selection.
+
+*&---------------------------------------------------------------------*
+*& Form FRM_F4_FILE
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*& -->  p1        text
+*& <--  p2        text
+*&---------------------------------------------------------------------*
+form frm_f4_file .
+  call function 'F4_FILENAME'
+    importing
+      file_name = p_file.
+endform.
+
+*&---------------------------------------------------------------------*
+*& Form FRM_READ_UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*& -->  p1        text
+*& <--  p2        text
+*&---------------------------------------------------------------------*
+form frm_read_upload_file .
+
+  data: lv_file_path   type string,
+        lv_file_length type i,
+        lv_file_name   type dbmsgora-filename.
+
+  lv_file_path = p_file.
+  lv_file_name = p_file.
+
+  call function 'SPLIT_FILENAME'
+    exporting
+      long_filename  = lv_file_name "上传文件路径
+    importing
+      pure_filename  = gv_file_name "文件名称
+      pure_extension = gv_file_type. "文件后缀
+
+  call function 'GUI_UPLOAD'
+    exporting
+      filename                = lv_file_path
+      filetype                = 'BIN'
+    importing
+      filelength              = lv_file_length
+    tables
+      data_tab                = gt_file
+    exceptions
+      file_open_error         = 1
+      file_read_error         = 2
+      no_batch                = 3
+      gui_refuse_filetransfer = 4
+      invalid_type            = 5
+      no_authority            = 6
+      unknown_error           = 7
+      bad_data_format         = 8
+      header_not_allowed      = 9
+      separator_not_allowed   = 10
+      header_too_long         = 11
+      unknown_dp_error        = 12
+      access_denied           = 13
+      dp_out_of_memory        = 14
+      disk_full               = 15
+      dp_timeout              = 16
+      others                  = 17.
+  if sy-subrc <> 0.
+    message s001 with '上传文件失败' display like 'E'.
+    leave list-processing.
+  endif.
+
+  "转xstring
+  call function 'SCMS_BINARY_TO_XSTRING'
+    exporting
+      input_length = lv_file_length
+    importing
+      buffer       = gv_file
+    tables
+      binary_tab   = gt_file
+    exceptions
+      failed       = 1
+      others       = 2.
+  if sy-subrc <> 0.
+    message s001 with '转xstring失败' display like 'E'.
+    leave list-processing.
+  endif.
+
+
+endform.
+
+*&---------------------------------------------------------------------*
+*& Form FRM_CALL_HTTP_TO_UPLOAD_FILE
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*& -->  p1        text
+*& <--  p2        text
+*&---------------------------------------------------------------------*
+form frm_call_http_to_upload_file .
+
+  data: lo_http_client type ref to if_http_client, "http客户端
+        lo_http_entity type ref to if_http_entity, "http实体
+        lt_http_header type tihttpnvp,             "http头部信息
+        ls_http_header type ihttpnvp,
+        lv_url         type string,                "http请求
+        lv_len         type i,                     "请求数据的长度
+        lv_response    type string,                "http响应返回信息
+        lv_code        type i.                     "http状态码
+
+  data: lv_error_code type sysubrc,
+        lv_error_msg  type string.
+
+  data: lv_file_name   type savwctxt-fieldcont,
+        lv_name_encode type savwctxt-fieldcont.
+
+  data: lv_content_disposition type string,
+        lv_content_type        type string.
+*https://c1dld.igtb.bankofchina.com/igtb-web-ic/_ajax.do?method=uploadDimsImageByTicketTamperCheckAction&_locale=zh_CN
+*  lv_url = 'http://192.168.194.12:8080/jeecg-boot/ncip/file/upload'.
+  lv_url = 'https://c1dld.igtb.bankofchina.com/igtb-web-ic/_ajax.do?method=uploadDimsImageByTicketTamperCheckAction&_locale=zh_CN'.
+
+
+  "创建http客户端请求
+  call method cl_http_client=>create_by_url
+    exporting
+      url                = lv_url
+    importing
+      client             = lo_http_client
+    exceptions
+      argument_not_found = 1
+      plugin_not_active  = 2
+      internal_error     = 3
+      others             = 4.
+
+  "设置http为post请求
+  lo_http_client->request->set_method( 'POST' ).
+
+*  ls_http_header-name = 'X-Access-Token'.
+*  ls_http_header-value = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJleHAiOjE2ODYxODM1OTcsInVzZXJuYW1lIjoiYWRtaW4ifQ.fpxtvBsFDVR5WmjP3iLXhD-K7ZiULofqwQ1S_DE9Hxk'.
+*  append ls_http_header to lt_http_header.
+
+  ls_http_header-name = 'Content-Type'.
+  ls_http_header-value = 'multipart/form-data'.
+  append ls_http_header to lt_http_header.
+
+  "设置http header
+  call method lo_http_client->request->set_header_fields
+    exporting
+      fields = lt_http_header.
+
+*  CALL METHOD lo_http_client->request->if_http_entity~set_formfield_encoding
+*    EXPORTING
+*      formfield_encoding = cl_http_request=>if_http_entity~co_encoding_raw.
+
+  lo_http_entity = lo_http_client->request->if_http_entity~add_multipart( ).
+
+  "utf-8编码文件名（目的是让上传后的文件名跟原来一样，不然会乱码）
+  lv_file_name = gv_file_name.
+  call function 'WWW_URLENCODE'
+    exporting
+      value         = lv_file_name
+    importing
+      value_encoded = lv_name_encode.
+
+  lv_content_disposition = 'form-data; name="file"; filename="' && lv_name_encode && '.' && gv_file_type && '"'.
+
+  call method lo_http_entity->set_header_field
+    exporting
+      name  = 'Content-Disposition'
+      "value = 'form-data; name="file"; filename="测试文件.pdf"'
+      value = lv_content_disposition.
+
+  "文件后缀转小写
+  translate gv_file_type to lower case.
+
+  case gv_file_type.
+    when 'jpg'.
+      lv_content_type = 'image/jpeg'.
+    when 'png'.
+      lv_content_type = 'image/png'.
+    when 'txt'.
+      lv_content_type = 'text/plain'.
+    when 'pdf'.
+      lv_content_type = 'application/pdf'.
+    when 'xlsx'.
+      lv_content_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'.
+    when 'xls'.
+      lv_content_type = 'application/vnd.ms-excel'.
+    when 'docx'.
+      lv_content_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'.
+    when 'doc'.
+      lv_content_type = 'application/msword'.
+  endcase.
+
+  call method lo_http_entity->set_content_type
+    exporting
+      content_type = lv_content_type.
+
+  lv_len = xstrlen( gv_file ).
+
+  call method lo_http_entity->set_data
+    exporting
+      data   = gv_file
+      offset = 0
+      length = lv_len.
+
+
+  "发送请求
+  call method lo_http_client->send
+    exceptions
+      http_communication_failure = 1
+      http_invalid_state         = 2
+      http_processing_failed     = 3
+      http_invalid_timeout       = 4
+      others                     = 5.
+
+  if sy-subrc ne 0.
+
+    call method lo_http_client->get_last_error
+      importing
+        code    = lv_error_code
+        message = lv_error_msg.
+
+  endif.
+
+  "请求返回结果
+  call method lo_http_client->receive
+    exceptions
+      http_communication_failure = 1
+      http_invalid_state         = 2
+      http_processing_failed     = 3.
+
+  "请求返回的状态码
+  call method lo_http_client->response->get_status
+    importing
+      code = lv_code.
+
+  "获取接口返回的数据
+  lv_response = lo_http_client->response->get_cdata( ).
+
+  cl_demo_output=>write( lv_response ).
+
+  cl_demo_output=>display(  ).
+
+endform.
