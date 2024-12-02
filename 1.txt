@@ -1,4 +1,8 @@
 add by vs-remote
 
+<<<<<<< HEAD
 local modified
 add by vs-remote
+=======
+remote modified
+>>>>>>> 2b1ab3b (modified 1.txt)
